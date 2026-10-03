@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Combact</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #scene { display: block; width: 100vw; height: 100vh; }
+
+    .intro {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      transition: opacity 1.4s ease, backdrop-filter 1.4s ease, -webkit-backdrop-filter 1.4s ease;
+    }
+    .intro.hide {
+      opacity: 0;
+      backdrop-filter: blur(0);
+      -webkit-backdrop-filter: blur(0);
+      pointer-events: none;
+    }
+    .start {
+      font: 500 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+      letter-spacing: 0.4em;
+      text-indent: 0.4em;
+      text-transform: uppercase;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      border-radius: 999px;
+      padding: 18px 52px;
+      cursor: pointer;
+      transition: background 0.3s, color 0.3s, border-color 0.3s, box-shadow 0.3s;
+    }
+    .start:hover:not(:disabled) {
+      background: #fff;
+      color: #000;
+      box-shadow: 0 0 40px rgba(255, 255, 255, 0.25);
+    }
+    .dream {
+      position: fixed;
+      left: 50%;
+      bottom: 9vh;
+      transform: translate(-50%, 12px);
+      opacity: 0;
+      pointer-events: none;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      transition: opacity 1s ease, transform 1s ease, background 0.3s, color 0.3s, box-shadow 0.3s;
+    }
+    .dream.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+    .scroll-hint {
+      position: fixed;
+      left: 50%;
+      bottom: 6vh;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      font: 500 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+      letter-spacing: 0.4em;
+      text-indent: 0.4em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.6);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 1s ease;
+    }
+    .scroll-hint.show { opacity: 1; }
+    .scroll-hint span {
+      width: 1px;
+      height: 40px;
+      background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.8));
+      animation: drip 2.2s ease-in-out infinite;
+      transform-origin: top;
+    }
+    @keyframes drip {
+      0% { transform: scaleY(0); opacity: 1; }
+      60% { transform: scaleY(1); opacity: 1; }
+      100% { transform: scaleY(1); opacity: 0; }
+    }
+    .start:disabled { cursor: default; color: rgba(255, 255, 255, 0.5); border-color: rgba(255, 255, 255, 0.15); }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div class="intro" id="intro">
+    <button class="start" id="startBtn" disabled>Loading</button>
+  </div>
+  <button class="start dream" id="dreamBtn">See my dream</button>
+  <div class="scroll-hint" id="scrollHint"><span></span>Scroll</div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
