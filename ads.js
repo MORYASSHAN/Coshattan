@@ -1,19 +1,10 @@
 import * as THREE from "three";
 
-// Billboard slides for the Times Square LED screens, drawn on one canvas (2 × 2 slides of 1024 × 512).
+// Billboard slides for the Times Square LED screens, drawn on one canvas (3 × 2 slides of 1024 × 512).
 // The city shader samples a slide and shows it through an LED dot pattern.
 const W = 1024, H = 512;
 const FONT = '"Arial Black", "Arial Bold", Impact, sans-serif';
 const RED = "#d7263d", GOLD = "#ffc23c", CYAN = "#7df9ff";
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
-}
 
 function arcReactor(ctx, x, y, r) {
   const glow = ctx.createRadialGradient(x, y, r * 0.1, x, y, r * 1.6);
@@ -52,29 +43,20 @@ function slideIronMan(ctx) {
   ctx.font = `700 26px ${FONT}`; ctx.fillText("GENIUS · BUILDER · DREAMER", 354, 400);
 }
 
-function slidePortrait(ctx, photo) {
-  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-  // photo on the left, cropped to a tall frame around the face
-  const fw = 420, fh = H;
-  const s = Math.max(fw / photo.width, fh / photo.height);
-  const dw = photo.width * s, dh = photo.height * s;
-  ctx.save();
-  ctx.beginPath(); ctx.rect(40, 0, fw, fh); ctx.clip();
-  ctx.filter = "contrast(1.25) saturate(1.3) brightness(1.1)";
-  ctx.drawImage(photo, 40 + (fw - dw) / 2, (fh - dh) / 2 - 10, dw, dh);
-  ctx.restore();
-  ctx.filter = "none";
-  const fade = ctx.createLinearGradient(330, 0, 470, 0);
-  fade.addColorStop(0, "rgba(0,0,0,0)"); fade.addColorStop(1, "rgba(0,0,0,1)");
-  ctx.fillStyle = fade; ctx.fillRect(330, 0, 140, H);
-  ctx.textAlign = "left";
-  ctx.fillStyle = "rgba(255,255,255,0.7)";
-  ctx.font = `700 30px ${FONT}`; ctx.fillText("MEET THE", 500, 170);
-  fitText(ctx, "IRON MAN", 500, 120);
-  ctx.fillStyle = GOLD; ctx.fillText("IRON MAN", 498, 285);
-  ctx.fillStyle = RED; ctx.fillRect(500, 315, 470, 8);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = `900 46px ${FONT}`; ctx.fillText("SHAAN", 500, 385);
+// A line of the story, set like a billboard
+function slideStory(top, bottom, accent) {
+  return (ctx) => {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#07090f"); g.addColorStop(1, "#000000");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    fitText(ctx, top, 900, 92);
+    ctx.fillStyle = "#ffffff"; ctx.fillText(top, W / 2, 225);
+    fitText(ctx, bottom, 900, 92);
+    ctx.fillStyle = accent; ctx.fillText(bottom, W / 2, 345);
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.font = `700 22px ${FONT}`; ctx.fillText("— SHAAN", W / 2, 420);
+  };
 }
 
 function slideIndustries(ctx) {
@@ -105,14 +87,20 @@ function slideDidIt(ctx) {
 
 export async function makeAdsTexture() {
   const canvas = document.createElement("canvas");
-  canvas.width = W * 2;
+  canvas.width = W * 3;   // 3 × 2 slides
   canvas.height = H * 2;
   const ctx = canvas.getContext("2d");
-  const photo = await loadImage("textures/shaan.png");
-  const slides = [slideIronMan, (c) => slidePortrait(c, photo), slideIndustries, slideDidIt];
+  const slides = [
+    slideIronMan,
+    slideStory("EVERY PRODUCT IS A STORY.", "MOST FORGET TO TELL IT.", GOLD),
+    slideIndustries,
+    slideStory("PEOPLE FORGET FEATURES.", "THEY REMEMBER FEELINGS.", CYAN),
+    slideDidIt,
+    slideStory("LET SILENCE SPEAK.", "LET THEM BE THE HERO.", GOLD),
+  ];
   slides.forEach((draw, i) => {
     ctx.save();
-    ctx.translate((i % 2) * W, Math.floor(i / 2) * H);
+    ctx.translate((i % 3) * W, Math.floor(i / 3) * H);
     ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
     draw(ctx);
     ctx.restore();

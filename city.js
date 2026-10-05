@@ -91,15 +91,16 @@ const WALL_FRAG = /* glsl */ `
     vec3 col;
     if (uHasAds > 0.5 && seed > 0.38) {
       // an ad slide, letterboxed to keep its 2:1 shape on any screen
-      float slide = mod(scene + floor(seed * 4.0), 4.0);
+      float slide = mod(scene + floor(seed * 6.0), 6.0);
       float aspect = size.x / size.y;
       vec2 st = uv;
       if (aspect > 2.0) st.x = 0.5 + (uv.x - 0.5) * (aspect / 2.0);
       else st.y = 0.5 + (uv.y - 0.5) * (2.0 / aspect);
       float inside = step(0.0, st.x) * step(st.x, 1.0) * step(0.0, st.y) * step(st.y, 1.0);
       st = clamp(st, 0.003, 0.997);
-      vec2 cellOrigin = vec2(mod(slide, 2.0), floor(slide / 2.0));
-      col = texture2D(uAds, (cellOrigin + vec2(st.x, 1.0 - st.y)) * 0.5).rgb * inside * 1.7;
+      vec2 cellOrigin = vec2(mod(slide, 3.0), floor(slide / 3.0));
+      // walls run right-to-left when seen from the street, so the slide is flipped to read correctly
+      col = texture2D(uAds, (cellOrigin + vec2(1.0 - st.x, 1.0 - st.y)) * vec2(1.0 / 3.0, 0.5)).rgb * inside * 1.7;
     } else {
       float type = mod(scene + floor(seed * 5.0), 4.0);
       float pat;
@@ -229,6 +230,13 @@ function timesSquareScreen(ax, az, bx, bz, L) {
   return 0.05 + 0.95 * (h - Math.floor(h));
 }
 
+// Statue of Liberty position in city meters (same projection as the data)
+const LIBERTY = (() => {
+  const lat0 = 40.758, lon0 = -73.9855, g = (29 * Math.PI) / 180;
+  const e = (-74.044502 - lon0) * Math.cos((lat0 * Math.PI) / 180) * 111320, n = (40.689247 - lat0) * 110540;
+  return [e * Math.cos(g) - n * Math.sin(g), -(e * Math.sin(g) + n * Math.cos(g))];
+})();
+
 function buildBuildings(buf) {
   const head = new Uint32Array(buf, 0, 3);
   const [nB, nR, nV] = head;
@@ -250,11 +258,14 @@ function buildBuildings(buf) {
   let roofV = 0;
 
   for (let b = 0; b < nB; b++) {
-    const h = meta[b * 4], minH = meta[b * 4 + 1], roofH = meta[b * 4 + 2], roofShape = meta[b * 4 + 3];
-    const top = h - roofH;
+    let h = meta[b * 4];
+    const minH = meta[b * 4 + 1], roofH = meta[b * 4 + 2], roofShape = meta[b * 4 + 3];
     const r0 = ringStart[b], r1 = ringStart[b + 1];
     // distance of the building from Times Square (drives the rising wave)
     const fx = verts[vertStart[r0] * 2], fz = verts[vertStart[r0] * 2 + 1];
+    // Liberty Island's star fort: the data height is the top of the pedestal; the fort walls are ~12 m
+    if (Math.hypot(fx - LIBERTY[0], fz - LIBERTY[1]) < 120) h = Math.min(h, 12);
+    const top = h - roofH;
     const dist = Math.hypot(fx, fz);
 
     const contour = [], holes = [];

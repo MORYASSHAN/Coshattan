@@ -7,6 +7,7 @@ import { loadHolograms } from "./holograms.js?v=2";
 import { loadCity } from "./city.js?v=2";
 import { makeAdsTexture } from "./ads.js";
 import { createIntro, INTRO_REVEAL_AFTER } from "./intro.js";
+import { createStory } from "./story.js";
 
 const canvas = document.getElementById("scene");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -330,11 +331,13 @@ skyScene.add(moonGlow);
 /* ---------- Smooth motion ---------- */
 // Critically damped spring (like Unity's SmoothDamp): glides to the target without overshoot,
 // so scroll steps turn into one continuous, eased movement.
-function smoothDamp(current, target, state, smoothTime, dt) {
+function smoothDamp(current, target, state, smoothTime, dt, maxSpeed = Infinity) {
   const omega = 2 / smoothTime;
   const x = omega * dt;
   const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
-  const change = current - target;
+  const maxChange = maxSpeed * smoothTime;
+  const change = THREE.MathUtils.clamp(current - target, -maxChange, maxChange);
+  target = current - change;
   const temp = (state.v + omega * change) * dt;
   state.v = (state.v - omega * temp) * decay;
   return target + (change + temp) * decay;
@@ -350,7 +353,15 @@ let tourTarget = 0, tour = 0;   // 0 → 1 along the tour
 
 function addScroll(amount) {
   if (mode === "orbit") scrollTarget = THREE.MathUtils.clamp(scrollTarget + amount, 0, 1);
-  else if (mode === "tour") tourTarget = THREE.MathUtils.clamp(tourTarget + amount * 0.22, 0, 1);
+  else if (mode === "tour") {
+    // slower around each sentence so there is time to read it, and never far ahead of the camera
+    const n = tourCaptions.length - 1;
+    const f = tourTarget * n;
+    const nearSentence = storyStops.some((i) => f > i - 1.3 && f < i + 0.5);
+    const step = amount * 0.2 * (nearSentence ? 0.45 : 1);
+    tourTarget = THREE.MathUtils.clamp(tourTarget + step, 0, 1);
+    tourTarget = THREE.MathUtils.clamp(tourTarget, tour - 1.6 / n, tour + 1.6 / n);
+  }
 }
 
 window.addEventListener("wheel", (e) => {
@@ -453,7 +464,8 @@ let startTime = 0;
 function fadeIn(audio, to = 0.6, seconds = 3) {
   const t0 = performance.now();
   const step = (now) => {
-    audio.volume = Math.min(to, (to * (now - t0)) / (seconds * 1000));
+    // (the frame timestamp can be slightly earlier than t0, so keep the volume within 0..to)
+    audio.volume = THREE.MathUtils.clamp((to * (now - t0)) / (seconds * 1000), 0, to);
     if (audio.volume < to) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
@@ -580,38 +592,65 @@ function aerialPose() {
   return [pos, AERIAL.target.clone()];
 }
 
-// Each stop: camera position, point it looks at, and an optional caption. Heights (m) stay
-// above the towers and only drop low over open water or wide open squares.
+// Each stop: camera position, point it looks at, an optional place caption, and an optional
+// line of the story. Heights (m) stay above the towers and only drop low over open water or
+// wide open squares.
 let tourPos = null, tourLook = null, tourCaptions = [];
+const story = createStory(scene, camera);
+let storyStops = [];   // tour stops that carry a sentence (the scroll slows down around them)
+let storyPlaced = false;
 function buildTour() {
   const P = PLACES;
   const C = (title, line) => ({ title, line });
+  const T = (id) => id;   // tags a stop so a sentence can be placed for it
   const stops = [
     [camera.position.clone(), new THREE.Vector3(CENTER.x, 2.6, CENTER.z)],
+    // on foot: walk up Broadway past yourself and the cars, into the lights
+    [grid(P.timesSquare, 2.6, -45, 1.7), grid(P.timesSquare, 0, -230, 14),
+      C("Times Square", "Walk up Broadway, right into the lights")],
+    [grid(P.timesSquare, -1.5, -125, 1.7), grid(P.timesSquare, 0, -320, 30)],
     [grid(P.timesSquare, 0, -120, 22), geo(P.oneTimesSquare, 0, 0, 60),
-      C("Times Square", "Broadway meets 7th Avenue — the crossroads of the world")],
+      C("Times Square", "Broadway meets 7th Avenue — the crossroads of the world"),
+      T("ts")],
     [grid(P.timesSquare, 0, 60, 35), grid(P.timesSquare, 0, -260, 40),
       C("Times Square", "Lit day and night by giant LED screens")],
-    [grid(P.timesSquare, 0, 0, 300), geo(P.rockefeller, 0, 0, 200)],
-    [geo(P.rockefeller, 250, -250, 330), geo(P.rockefeller, 0, 0, 220),
-      C("Rockefeller Center", "30 Rock and the Top of the Rock observation deck")],
+    // racing low up the 7th Avenue canyon...
+    [grid(P.timesSquare, 0, -150, 60), grid(P.timesSquare, 0, -650, 55),
+      C("7th Avenue", "Racing up the canyon toward Central Park"),
+      T("canyon")],
+    [grid(P.timesSquare, 0, -500, 75), grid(P.timesSquare, 0, -900, 130)],
+    // ...pull straight up out of the canyon...
+    [grid(P.timesSquare, 0, -620, 265), grid(P.centralParkTower, 0, 0, 380)],
+    // ...and rise alongside Central Park Tower to its crown
+    [grid(P.centralParkTower, 0, 260, 320), grid(P.centralParkTower, 0, 0, 400),
+      C("Central Park Tower", "472 m · the tallest residential building on Earth")],
+    [grid(P.centralParkTower, 0, 280, 450), grid(P.centralParkTower, 0, 0, 470)],
     [geo(P.centralParkTower, 350, -450, 520), geo(P.centralParkTower, 0, 0, 400),
-      C("Billionaires' Row", "The world's slenderest supertall towers line 57th Street")],
+      C("Billionaires' Row", "The world's slenderest supertall towers line 57th Street"),
+      T("cpt")],
     [geo(P.parkSouth, 0, 0, 380), geo(P.bethesda, 0, 0, 0),
       C("Central Park", "843 acres of green in the middle of Manhattan")],
-    [geo(P.centralPark, 0, 0, 260), geo(P.reservoir, 0, 0, 0),
-      C("Central Park", "The Reservoir, with the Met Museum on its eastern edge")],
+    // straight down over the park
+    [geo(P.centralPark, 0, -40, 950), geo(P.centralPark, 0, 0, 0),
+      C("Central Park", "The Reservoir, with the Met Museum on its eastern edge"),
+      T("cptop")],
     [geo(P.harlemMeer, 0, 0, 320), geo(P.gwBridge, 0, 0, 60),
       C("Harlem", "Uptown, with the George Washington Bridge in the distance")],
     [geo(P.hudsonRiver86, 0, 0, 300), geo(P.hudsonYards, 0, 0, 300)],
     [geo(P.hudsonYards, -500, 200, 360), geo(P.hudsonYards, 0, 0, 320),
-      C("Hudson Yards", "The city's newest neighborhood, home of the Edge sky deck")],
+      C("Hudson Yards", "The city's newest neighborhood, home of the Edge sky deck"),
+      T("hy")],
     [geo(P.westSide22, 0, 0, 110), geo(P.highLineSouth, 0, 0, 10),
-      C("The High Line", "An old elevated freight railway turned into a park")],
+      C("The High Line", "An old elevated freight railway turned into a park"),
+      T("hl")],
     [geo(P.empireState, -380, 260, 380), geo(P.empireState, 0, 0, 350),
       C("Empire State Building", "1931 · 443 m to the tip of its mast")],
     [geo(P.empireState, 330, 120, 410), geo(P.empireState, 0, 0, 370),
       C("Empire State Building", "For nearly 40 years, the tallest building in the world")],
+    // looking up at the mast from below its crown
+    [geo(P.empireState, 260, 380, 230), geo(P.empireState, 0, 0, 440),
+      C("Empire State Building", "Looking up at the mast"),
+      T("esbup")],
     [geo(P.empireState, 220, -330, 360), geo(P.flatiron, 0, 0, 60)],
     [geo(P.flatiron, 0, 260, 170), geo(P.flatiron, 0, 0, 40),
       C("Flatiron Building", "1902 · The triangular icon on Madison Square")],
@@ -626,19 +665,84 @@ function buildTour() {
     [geo(P.harbor, 0, 0, 220), geo(P.liberty, 0, 0, 60),
       C("New York Harbor", "Where ships once brought millions of immigrants")],
     [geo(P.liberty, 150, -120, 70), geo(P.liberty, 0, 0, 72),
-      C("Statue of Liberty", "A gift from France, 1886 · 93 m from ground to torch")],
+      C("Statue of Liberty", "A gift from France, 1886 · 93 m from ground to torch"),
+      T("liberty")],
     [geo(P.liberty, -180, -260, 75), geo(P.oneWTC, 0, 0, 250),
       C("Statue of Liberty", "Lifting her torch toward Lower Manhattan")],
     [geo(P.battery, 0, 0, 150), geo(P.brooklynBridge, 0, 0, 40)],
-    [geo(P.brooklynBridge, 500, 150, 150), geo(P.brooklynBridge, 0, 0, 50),
+    // skim over both towers of the Brooklyn Bridge...
+    [geo(P.brooklynBridge, -330, 230, 125), geo(P.brooklynBridge, 199, -139, 95),
       C("Brooklyn Bridge", "1883 · The first steel-wire suspension bridge")],
+    // ...then turn back to face the downtown skyline
+    [geo(P.brooklynBridge, 280, -200, 120), geo(P.brooklynBridge, -700, 480, 160),
+      C("Brooklyn Bridge", "Looking back at Lower Manhattan"),
+      T("bb")],
+    [geo(P.brooklynBridge, 500, 150, 150), geo(P.brooklynBridge, 0, 0, 50)],
     [geo(P.eastRiver, 0, 0, 330), geo(P.chrysler, 0, 0, 280),
-      C("Chrysler Building", "Art Deco crown of Midtown, beside the United Nations")],
-    [...aerialPose(), C("Manhattan", "21.6 km long, 3.7 km at its widest, home to 1.6 million people")],
+      C("Chrysler Building", "Art Deco crown of Midtown, beside the United Nations"),
+      T("chrysler")],
+    [...aerialPose(), C("Manhattan", "21.6 km long, 3.7 km at its widest, home to 1.6 million people"),
+      T("final")],
   ];
   tourPos = new THREE.CatmullRomCurve3(stops.map((s) => s[0]), false, "centripetal");
   tourLook = new THREE.CatmullRomCurve3(stops.map((s) => s[1]), false, "centripetal");
   tourCaptions = stops.map((s) => s[2] || null);
+  if (!storyPlaced) { placeStory(stops); storyPlaced = true; }
+  story.show();
+}
+
+// Each sentence lives at one place in the city and stays there (sizes in meters)
+function placeStory(stops) {
+  const P = PLACES, M = UNITS_PER_METER;
+  const cam = (id) => stops.find((st) => st[3] === id)[0];
+  const at = (id) => stops.findIndex((st) => st[3] === id);   // which stop a sentence belongs to
+  const toward = (at, from, meters) => {           // nudge a point toward the viewer (onto a facade)
+    const d = new THREE.Vector3(from.x - at.x, 0, from.z - at.z).normalize();
+    return at.clone().addScaledVector(d, meters * M);
+  };
+  const away = (at, from, meters) => toward(at, from, -meters);
+  // a point on a stop's line of sight (`depth` of the way to what it looks at), raised `lift` of the view height
+  const inView = (id, depth, lift) => {
+    const [c, l] = stops.find((st) => st[3] === id);
+    const p = c.clone().lerp(l, depth);
+    const viewH = 2 * c.distanceTo(p) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    return p.add(new THREE.Vector3(0, viewH * lift, 0));
+  };
+  storyStops = stops.map((st, i) => (st[3] ? i : -1)).filter((i) => i >= 0);
+
+  // a banner hung across 7th Avenue, ahead of you as you walk up from Times Square
+  story.wall(["EVERY PRODUCT IS A STORY.", "MOST FORGET TO TELL IT."],
+    { at: grid(P.timesSquare, 0, -205, 16), from: grid(P.timesSquare, 0, -125, 2), fill: 0.8, stop: 1, until: 2 });
+  // a banner hung across the 7th Avenue canyon, ahead of you as you race north
+  story.wall(["A BUTTON IS A BUTTON.", "A CHOICE IS A BEGINNING."],
+    { at: grid(P.timesSquare, 0, -430, 60), from: cam("canyon"), fill: 0.6, stop: at("canyon") });
+  // on the face of Central Park Tower
+  story.wall(["COMBACT OPENS IN THE DARK", "AND ASKS ONE THING:", "CHOOSE A SONG TO LIFT YOUR MOOD."],
+    { at: toward(geo(P.centralParkTower, 0, 0, 300), cam("cpt"), 30), from: cam("cpt"), stop: at("cpt") });
+  // written across the park, read from straight above
+  story.ground(["IT DOESN'T SAY “SUBMIT.”", "IT SAYS “SEE MY DREAM.”"],
+    { at: geo(P.centralPark, 0, 0, 2), from: cam("cptop"), stop: at("cptop") });
+  // on the Hudson Yards towers, facing the river
+  story.wall(["MY PORTFOLIO ISN'T A LIST.", "IT'S A NIGHT IN VEGAS."],
+    { at: toward(geo(P.hudsonYards, 0, 0, 250), cam("hy"), 60), from: cam("hy"), stop: at("hy") });
+  // standing along the High Line
+  story.wall(["PEOPLE FORGET FEATURES.", "THEY REMEMBER FEELINGS."],
+    { at: geo([40.7428, -74.0068], 0, 0, 34), from: cam("hl"), stop: at("hl") });
+  // in the sky beside the Empire State's mast, the whole sentence in view as you look up
+  story.wall(["START WITH WHAT THEY SHOULD FEEL,", "NOT WHAT IT DOES."],
+    { at: inView("esbup", 0.55, 0.24), from: cam("esbup"), fill: 0.75, stop: at("esbup") });
+  // rising behind Lady Liberty, over the harbor
+  story.wall(["LET SILENCE SPEAK.", "LET THEM BE THE HERO."],
+    { at: away(geo(P.liberty, 0, 0, 78), cam("liberty"), 70), from: cam("liberty"), stop: at("liberty") });
+  // over the bridge, with the downtown skyline behind it
+  story.wall(["CODE BUILDS THE WORLD.", "STORY MAKES THEM STAY."],
+    { at: inView("bb", 0.35, 0.2), from: cam("bb"), fill: 0.7, stop: at("bb") });
+  // on the Chrysler Building
+  story.wall(["DON'T JUST ASK IF IT WORKS.", "ASK HOW IT FEELS INSIDE."],
+    { at: toward(geo(P.chrysler, 0, 0, 235), cam("chrysler"), 40), from: cam("chrysler"), stop: at("chrysler") });
+  // the signature, standing over Central Park, seen in the final view of the whole island
+  story.wall(["BY SHAAN"],
+    { at: geo([40.7745, -73.9665], 0, 0, 650), from: cam("final"), fill: 0.45, stop: at("final"), until: at("final") + 5 });
 }
 
 const captionEl = document.getElementById("caption");
@@ -661,6 +765,8 @@ function updateCaption() {
 }
 
 const scrollHint = document.getElementById("scrollHint");
+const preLines = [...document.querySelectorAll("#prestory .pre-line")];
+const linksEl = document.getElementById("links");
 let dreamStart = 0;
 
 dreamBtn.addEventListener("click", () => {
@@ -676,27 +782,64 @@ dreamBtn.addEventListener("click", () => {
 const lookAt = new THREE.Vector3();
 const lookSmooth = new THREE.Vector3();
 let lookReady = false;
+const prevPos = new THREE.Vector3(), aimDir = new THREE.Vector3();
+let walked = 0, prevYaw = 0, roll = 0, fovNow = 55;
 function updateCameraMode(t, dt) {
   if (mode === "orbit") {
     scroll = smoothDamp(scroll, scrollTarget, orbitSpring, 0.7, dt);
     placeCamera(scroll * Math.PI * 2);
     scrollHint.classList.toggle("show", introWaiting || (started && t - startTime > 3.5 && scrollTarget < 0.02));
+    // the opening lines, one whole sentence at a time as the moon rises
+    const k = started ? Math.floor((scroll - 0.04) / 0.31) : -1;
+    preLines.forEach((el, i) => el.classList.toggle("show", i === k && scroll > 0.04 && scroll < 0.95));
     return;
   }
   // Tour: the scroll position moves the camera along the path (smoothed so it glides)
-  tour = THREE.MathUtils.clamp(smoothDamp(tour, tourTarget, tourSpring, 1.1, dt), 0, 1);
+  // smooth glide with a speed limit (about one stop every 1.4 s at most)
+  const stopsTotal = tourCaptions.length - 1;
+  tour = THREE.MathUtils.clamp(smoothDamp(tour, tourTarget, tourSpring, 1.5, dt, 1 / (stopsTotal * 1.4)), 0, 1);
   tourPos.getPoint(tour, camera.position);
+  camera.position.y = Math.max(camera.position.y, 1.2 * UNITS_PER_METER);   // the smooth path must never dip below the street
   tourLook.getPoint(tour, lookAt);
   // the aim follows a touch behind the position, which softens every turn
-  if (!lookReady) { lookSmooth.copy(lookAt); lookReady = true; }
+  if (!lookReady) { lookSmooth.copy(lookAt); lookReady = true; prevPos.copy(camera.position); }
   lookSmooth.lerp(lookAt, 1 - Math.exp(-dt * 3.5));
+
+  // --- feel: walking, flying ---
+  const stepLen = camera.position.distanceTo(prevPos);
+  prevPos.copy(camera.position);
+  const speed = stepLen / Math.max(dt, 1e-3);                      // scene units per second
+  const heightM = camera.position.y / UNITS_PER_METER;
+  // on foot: a gentle footstep sway while moving at street level
+  const onFoot = 1 - THREE.MathUtils.smoothstep(heightM, 3, 8);
+  walked += stepLen / UNITS_PER_METER;
+  const moving = Math.min(1, speed / (1.2 * UNITS_PER_METER));
+  camera.position.y += (Math.abs(Math.sin((walked * Math.PI) / 0.72)) - 0.5) * 0.05 * UNITS_PER_METER * onFoot * moving;
   camera.lookAt(lookSmooth);
+  // in flight: bank into turns like a bird
+  aimDir.copy(lookSmooth).sub(camera.position);
+  const yaw = Math.atan2(aimDir.x, aimDir.z);
+  let dYaw = yaw - prevYaw;
+  dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
+  prevYaw = yaw;
+  const flying = THREE.MathUtils.smoothstep(heightM, 15, 80);
+  const rollTarget = THREE.MathUtils.clamp((-dYaw / Math.max(dt, 1e-3)) * 0.3, -0.13, 0.13) * flying;
+  roll += (rollTarget - roll) * (1 - Math.exp(-dt * 2.5));
+  camera.rotateZ(roll);
+  // speed: the view opens up a little as you rush forward
+  const rush = THREE.MathUtils.clamp(speed / Math.max(camera.position.y, 30) * 0.9, 0, 1);
+  fovNow += (55 + rush * 12 - fovNow) * (1 - Math.exp(-dt * 2));
+  camera.fov = skyCamera.fov = fovNow;
+  camera.updateProjectionMatrix();
+  skyCamera.updateProjectionMatrix();
   // keep depth precision good at every height
   const near = THREE.MathUtils.clamp(camera.position.y * 0.02, 0.5, 300);
   if (Math.abs(near - camera.near) > 0.01) { camera.near = near; camera.updateProjectionMatrix(); }
   // invite scrolling once the city has risen around the man; hide it once they do
   scrollHint.classList.toggle("show", t - dreamStart > 3 && tourTarget < 0.01);
   updateCaption();
+  story.update(camera, dt, tour * (tourCaptions.length - 1));
+  linksEl.classList.toggle("show", tour > 0.95);   // portfolio / LinkedIn / X at the end
 }
 
 /* ---------- Loop ---------- */

@@ -223,6 +223,54 @@
       text-shadow: 0 0 12px rgba(255, 255, 255, 0.25);
       opacity: 0;
     }
+    .prestory { position: fixed; left: 0; right: 0; top: 16vh; pointer-events: none; }
+    .pre-line {
+      position: absolute;
+      left: 50%;
+      width: min(92vw, 1100px);
+      text-align: center;
+      font-family: "Anton", "Arial Narrow", Impact, sans-serif;
+      font-size: clamp(22px, 4.2vw, 56px);
+      line-height: 1.2;
+      letter-spacing: 0.05em;
+      color: rgba(255, 255, 255, 0.82);
+      text-shadow: 0 0 16px rgba(255, 255, 255, 0.3);
+      opacity: 0;
+      transform: translate(-50%, 8px);
+      filter: blur(6px);
+      transition: opacity 1.2s ease, transform 1.2s ease, filter 1.2s ease;
+    }
+    .pre-line.show { opacity: 1; transform: translate(-50%, 0); filter: blur(0); }
+    .links {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      max-width: calc(100vw - 36px);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 1s ease, transform 1s ease;
+    }
+    .links.show { opacity: 1; transform: none; pointer-events: auto; }
+    .link {
+      font: 500 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      text-decoration: none;
+      color: #fff;
+      padding: 10px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      transition: background 0.3s, color 0.3s, border-color 0.3s;
+    }
+    .link:hover { background: #fff; color: #000; border-color: #fff; }
     .start:disabled { cursor: default; color: rgba(255, 255, 255, 0.5); border-color: rgba(255, 255, 255, 0.15); }
   </style>
   <script type="importmap">
@@ -249,7 +297,17 @@
     </div>
   </div>
   <button class="start dream" id="dreamBtn">See my dream</button>
+  <div class="prestory" id="prestory">
+    <div class="pre-line">HI FOLKS, THIS IS SHAAN.</div>
+    <div class="pre-line">JUST FEEL THE STORY, NOT THE WORDS.</div>
+    <div class="pre-line">GET READY TO KNOW PRODUCT STORYTELLING IN MY DREAM.</div>
+  </div>
   <div class="scroll-hint" id="scrollHint"><span></span>Scroll</div>
+  <nav class="links" id="links" aria-label="Find me">
+    <a class="link" href="https://moryasshan.vercel.app" target="_blank" rel="noopener">Check out my portfolio</a>
+    <a class="link" href="https://www.linkedin.com/in/shaan-goswami-778729274/" target="_blank" rel="noopener">LinkedIn</a>
+    <a class="link" href="https://x.com/Shaanjson" target="_blank" rel="noopener">X</a>
+  </nav>
   <div class="caption" id="caption"><div class="cap-title"></div><div class="cap-line"></div></div>
   <button class="sound" id="soundBtn" aria-label="Pause or play the music"><i></i><i></i><i></i></button>
   <script type="module" src="main.js?v=2"></script>
