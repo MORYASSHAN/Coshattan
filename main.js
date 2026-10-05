@@ -417,50 +417,36 @@ let holograms = null;
 let city = null;
 const dreamBtn = document.getElementById("dreamBtn");
 
-// Everything loads up front — models, the city, and all three songs (fully downloaded) —
-// so nothing stalls once the music starts.
-const songUrls = {};
+// Only the opening (man + cars) blocks the song buttons. The songs stream (each starts
+// buffering right away), and Manhattan loads in the background during the title and
+// moonrise — it is ready long before "See my dream" appears.
+const songAudio = {};
 const showLoading = (p) => (loadingText.textContent = `Loading ${Math.round(p * 100)}%`);
 
-async function fetchWithProgress(url, onProgress) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: ${res.status}`);
-  const total = +res.headers.get("Content-Length") || 0;
-  const reader = res.body.getReader();
-  const chunks = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.length;
-    if (total) onProgress(got / total);
-  }
-  return new Blob(chunks, { type: res.headers.get("Content-Type") || "audio/mpeg" });
+for (const b of songBtns) {
+  const a = new Audio();
+  a.preload = "none";           // starts buffering once the buttons unlock (see below)
+  a.loop = true;
+  a.src = encodeURI(b.dataset.src);
+  songAudio[b.dataset.src] = a;
+}
+
+async function loadCityInBackground() {
+  city = await loadCity(scene, { origin: CITY_ORIGIN, unitsPerMeter: UNITS_PER_METER });
+  city.setAds(await makeAdsTexture());
+  // upload the city to the GPU now (it is still below the floor, so nothing shows)
+  city.group.visible = true;
+  composer.render();
+  city.group.visible = false;
 }
 
 (async () => {
   try {
-    holograms = await loadHolograms(scene, (p) => showLoading(p * 0.3));
-    city = await loadCity(scene, { origin: CITY_ORIGIN, unitsPerMeter: UNITS_PER_METER });
-    city.setAds(await makeAdsTexture());
-    showLoading(0.45);
-    // upload the city to the GPU now (it is still below the floor, so nothing shows)
-    city.group.visible = true;
-    composer.render();
-    city.group.visible = false;
-    showLoading(0.5);
-    const files = songBtns.map((b) => b.dataset.src);
-    const done = files.map(() => 0);
-    await Promise.all(files.map(async (file, i) => {
-      const blob = await fetchWithProgress(encodeURI(file), (p) => {
-        done[i] = p;
-        showLoading(0.5 + 0.5 * (done.reduce((a, b) => a + b, 0) / files.length));
-      });
-      songUrls[file] = URL.createObjectURL(blob);
-    }));
+    holograms = await loadHolograms(scene, (p) => showLoading(p));
     loadingText.textContent = "";
     songBtns.forEach((b) => (b.disabled = false));
+    for (const a of Object.values(songAudio)) { a.preload = "auto"; a.load(); }
+    loadCityInBackground().catch((err) => console.error("City failed to load:", err));
   } catch (err) {
     console.error(err);
     loadingText.textContent = "Failed to load";
@@ -521,9 +507,9 @@ async function playTitle() {
 let titleRunning = false;
 songBtns.forEach((btn) =>
   btn.addEventListener("click", () => {
-    if (started || titleRunning || !holograms || !songUrls[btn.dataset.src]) return;
+    if (started || titleRunning || !holograms) return;
     titleRunning = true;
-    music = new Audio(songUrls[btn.dataset.src]);
+    music = songAudio[btn.dataset.src];
     music.loop = true;
     music.volume = 0;
     music.addEventListener("play", () => soundBtn.classList.remove("paused"));

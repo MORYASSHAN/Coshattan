@@ -12,6 +12,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": [".claude/serve.py", "5174"],
       "port": 5174
+    },
+    {
+      "name": "site-3",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [".claude/serve.py", "5175"],
+      "port": 5175
     }
   ]
 }
