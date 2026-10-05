@@ -170,6 +170,17 @@ function normalize(model, { height, length }) {
   return box.getSize(new THREE.Vector3()).y;
 }
 
+// Try a download again (with a short pause) if the connection drops
+async function withRetry(load, tries = 3) {
+  for (let i = 0; ; i++) {
+    try { return await load(); }
+    catch (err) {
+      if (i >= tries - 1) throw err;
+      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    }
+  }
+}
+
 export async function loadHolograms(scene, onProgress) {
   const manager = new THREE.LoadingManager();
   manager.onProgress = (_url, loaded, total) => onProgress?.(loaded / total);
@@ -177,9 +188,9 @@ export async function loadHolograms(scene, onProgress) {
   const loader = new GLTFLoader(manager).setDRACOLoader(draco);
 
   const [manGltf, superGltf, classicGltf] = await Promise.all([
-    loader.loadAsync("models/man.glb"),
-    loader.loadAsync("models/supercar.glb"),
-    loader.loadAsync("models/classic-car.glb"),
+    withRetry(() => loader.loadAsync("models/man.glb")),
+    withRetry(() => loader.loadAsync("models/supercar.glb")),
+    withRetry(() => loader.loadAsync("models/classic-car.glb")),
   ]);
 
   const items = [];

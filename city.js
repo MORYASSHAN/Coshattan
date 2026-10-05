@@ -478,12 +478,42 @@ function buildStatue() {
   return statue;
 }
 
-export async function loadCity(scene, { origin, unitsPerMeter }) {
+// Download a data file with progress, retrying if the connection drops.
+// (Hosts send these compressed, so the size is often unknown: fall back to the expected size.)
+async function fetchData(url, expectedBytes, onBytes) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url}: ${res.status}`);
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        onBytes(Math.min(got, expectedBytes * 0.99));
+      }
+      const out = new Uint8Array(got);
+      let o = 0;
+      for (const c of chunks) { out.set(c, o); o += c.length; }
+      onBytes(expectedBytes);
+      return out.buffer;
+    } catch (err) {
+      if (attempt >= 3) throw err;
+      onBytes(0);
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+}
+
+export async function loadCity(scene, { origin, unitsPerMeter, onProgress }) {
+  const sizes = [5.05e6, 2.08e6];
+  const got = [0, 0];
+  const report = () => onProgress?.((got[0] + got[1]) / (sizes[0] + sizes[1]));
   const [bBuf, lBuf] = await Promise.all(
-    ["data/buildings.bin", "data/lines.bin"].map((u) => fetch(u).then((r) => {
-      if (!r.ok) throw new Error(`${u}: ${r.status}`);
-      return r.arrayBuffer();
-    }))
+    ["data/buildings.bin", "data/lines.bin"].map((u, i) => fetchData(u, sizes[i], (b) => { got[i] = b; report(); }))
   );
 
   const { walls, roofs, edges, count } = buildBuildings(bBuf);

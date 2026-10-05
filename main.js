@@ -417,36 +417,30 @@ let holograms = null;
 let city = null;
 const dreamBtn = document.getElementById("dreamBtn");
 
-// Only the opening (man + cars) blocks the song buttons. The songs stream (each starts
-// buffering right away), and Manhattan loads in the background during the title and
-// moonrise — it is ready long before "See my dream" appears.
-const songAudio = {};
+// Only the opening (man + cars) blocks the song buttons. Manhattan starts downloading right
+// away too, in parallel, so it is ready long before "See my dream". The chosen song streams.
 const showLoading = (p) => (loadingText.textContent = `Loading ${Math.round(p * 100)}%`);
+let cityProgress = 0, cityFailed = false;
 
-for (const b of songBtns) {
-  const a = new Audio();
-  a.preload = "none";           // starts buffering once the buttons unlock (see below)
-  a.loop = true;
-  a.src = encodeURI(b.dataset.src);
-  songAudio[b.dataset.src] = a;
-}
-
-async function loadCityInBackground() {
-  city = await loadCity(scene, { origin: CITY_ORIGIN, unitsPerMeter: UNITS_PER_METER });
-  city.setAds(await makeAdsTexture());
-  // upload the city to the GPU now (it is still below the floor, so nothing shows)
-  city.group.visible = true;
-  composer.render();
-  city.group.visible = false;
-}
+const cityReady = loadCity(scene, { origin: CITY_ORIGIN, unitsPerMeter: UNITS_PER_METER, onProgress: (p) => (cityProgress = p) })
+  .then(async (c) => {
+    c.setAds(await makeAdsTexture());
+    // upload the city to the GPU now (it is still below the floor, so nothing shows)
+    c.group.visible = true;
+    composer.render();
+    c.group.visible = false;
+    city = c;
+  })
+  .catch((err) => {
+    console.error("City failed to load:", err);
+    cityFailed = true;
+  });
 
 (async () => {
   try {
     holograms = await loadHolograms(scene, (p) => showLoading(p));
     loadingText.textContent = "";
     songBtns.forEach((b) => (b.disabled = false));
-    for (const a of Object.values(songAudio)) { a.preload = "auto"; a.load(); }
-    loadCityInBackground().catch((err) => console.error("City failed to load:", err));
   } catch (err) {
     console.error(err);
     loadingText.textContent = "Failed to load";
@@ -509,7 +503,7 @@ songBtns.forEach((btn) =>
   btn.addEventListener("click", () => {
     if (started || titleRunning || !holograms) return;
     titleRunning = true;
-    music = songAudio[btn.dataset.src];
+    music = new Audio(encodeURI(btn.dataset.src));   // streams while it plays
     music.loop = true;
     music.volume = 0;
     music.addEventListener("play", () => soundBtn.classList.remove("paused"));
@@ -722,8 +716,15 @@ function tick() {
   skyCamera.quaternion.copy(camera.quaternion);   // the sky turns with the view but never moves
   moonGlow.position.copy(moon.position);
   moonGlow.lookAt(skyCamera.position);
-  if (mode === "orbit" && city && rise > 0.98 && scroll > 0.97) dreamBtn.classList.add("show");
-  else if (mode === "orbit") dreamBtn.classList.remove("show");
+  // "See my dream" appears once the moon is up; if Manhattan is still loading it shows progress
+  if (mode === "orbit" && rise > 0.98 && scroll > 0.97) {
+    dreamBtn.classList.add("show");
+    dreamBtn.disabled = !city;
+    const label = city ? "See my dream"
+      : cityFailed ? "Couldn't load the city — refresh to retry"
+      : `Loading Manhattan ${Math.round(cityProgress * 100)}%`;
+    if (dreamBtn.textContent !== label) dreamBtn.textContent = label;
+  } else if (mode === "orbit") dreamBtn.classList.remove("show");
 
   // Follow the cursor smoothly; react while moving, keep a faint glow while resting
   if (pointerIn) castPointer();
