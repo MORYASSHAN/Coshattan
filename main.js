@@ -3,8 +3,10 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { loadHolograms } from "./holograms.js";
-import { loadCity } from "./city.js";
+import { loadHolograms } from "./holograms.js?v=2";
+import { loadCity } from "./city.js?v=2";
+import { makeAdsTexture } from "./ads.js";
+import { createIntro, INTRO_REVEAL_AFTER } from "./intro.js";
 
 const canvas = document.getElementById("scene");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -325,6 +327,20 @@ const moonGlow = new THREE.Mesh(
 );
 skyScene.add(moonGlow);
 
+/* ---------- Smooth motion ---------- */
+// Critically damped spring (like Unity's SmoothDamp): glides to the target without overshoot,
+// so scroll steps turn into one continuous, eased movement.
+function smoothDamp(current, target, state, smoothTime, dt) {
+  const omega = 2 / smoothTime;
+  const x = omega * dt;
+  const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const change = current - target;
+  const temp = (state.v + omega * change) * dt;
+  state.v = (state.v - omega * temp) * decay;
+  return target + (change + temp) * decay;
+}
+const orbitSpring = { v: 0 }, tourSpring = { v: 0 };
+
 /* ---------- Scroll → orbit + moonrise ---------- */
 let scrollTarget = 0;   // 0 → 1 (one full turn)
 let scroll = 0;
@@ -334,7 +350,7 @@ let tourTarget = 0, tour = 0;   // 0 → 1 along the tour
 
 function addScroll(amount) {
   if (mode === "orbit") scrollTarget = THREE.MathUtils.clamp(scrollTarget + amount, 0, 1);
-  else if (mode === "tour") tourTarget = THREE.MathUtils.clamp(tourTarget + amount * 0.4, 0, 1);
+  else if (mode === "tour") tourTarget = THREE.MathUtils.clamp(tourTarget + amount * 0.22, 0, 1);
 }
 
 window.addEventListener("wheel", (e) => {
@@ -393,31 +409,133 @@ composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
 /* ---------- Holograms: man + two cars ---------- */
-const startBtn = document.getElementById("startBtn");
+const songBtns = [...document.querySelectorAll(".song")];
+const loadingText = document.getElementById("loadingText");
 const intro = document.getElementById("intro");
 let holograms = null;
 
 let city = null;
 const dreamBtn = document.getElementById("dreamBtn");
 
-loadHolograms(scene, (p) => (startBtn.textContent = `Loading ${Math.round(p * 100)}%`))
-  .then((h) => {
-    holograms = h;
-    startBtn.textContent = "Start";
-    startBtn.disabled = false;
-    // Load Manhattan quietly in the background
-    return loadCity(scene, { origin: CITY_ORIGIN, unitsPerMeter: UNITS_PER_METER }).then((c) => (city = c));
-  })
-  .catch((err) => {
-    console.error(err);
-    startBtn.textContent = "Failed to load";
-  });
+// Everything loads up front — models, the city, and all three songs (fully downloaded) —
+// so nothing stalls once the music starts.
+const songUrls = {};
+const showLoading = (p) => (loadingText.textContent = `Loading ${Math.round(p * 100)}%`);
 
-startBtn.addEventListener("click", () => {
-  intro.classList.add("hide");
-  holograms.start(clock.elapsedTime + 0.5);
-  started = true;
+async function fetchWithProgress(url, onProgress) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  const total = +res.headers.get("Content-Length") || 0;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    if (total) onProgress(got / total);
+  }
+  return new Blob(chunks, { type: res.headers.get("Content-Type") || "audio/mpeg" });
+}
+
+(async () => {
+  try {
+    holograms = await loadHolograms(scene, (p) => showLoading(p * 0.3));
+    city = await loadCity(scene, { origin: CITY_ORIGIN, unitsPerMeter: UNITS_PER_METER });
+    city.setAds(await makeAdsTexture());
+    showLoading(0.45);
+    // upload the city to the GPU now (it is still below the floor, so nothing shows)
+    city.group.visible = true;
+    composer.render();
+    city.group.visible = false;
+    showLoading(0.5);
+    const files = songBtns.map((b) => b.dataset.src);
+    const done = files.map(() => 0);
+    await Promise.all(files.map(async (file, i) => {
+      const blob = await fetchWithProgress(encodeURI(file), (p) => {
+        done[i] = p;
+        showLoading(0.5 + 0.5 * (done.reduce((a, b) => a + b, 0) / files.length));
+      });
+      songUrls[file] = URL.createObjectURL(blob);
+    }));
+    loadingText.textContent = "";
+    songBtns.forEach((b) => (b.disabled = false));
+  } catch (err) {
+    console.error(err);
+    loadingText.textContent = "Failed to load";
+  }
+})();
+
+/* ---------- Music: the visitor picks a song, which also starts the experience ---------- */
+let music = null;
+let startTime = 0;
+function fadeIn(audio, to = 0.6, seconds = 3) {
+  const t0 = performance.now();
+  const step = (now) => {
+    audio.volume = Math.min(to, (to * (now - t0)) / (seconds * 1000));
+    if (audio.volume < to) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+const soundBtn = document.getElementById("soundBtn");
+soundBtn.addEventListener("click", () => {
+  if (!music) return;
+  if (music.paused) music.play();
+  else music.pause();
 });
+
+/* ---------- Title: full-screen words assemble, then one scroll flies through them ---------- */
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+let introWaiting = false;   // letters are up, waiting for the visitor's first scroll
+
+function firstScroll() {
+  return new Promise((resolve) => {
+    const go = (e) => {
+      if (e.type === "keydown" && !["ArrowDown", "PageDown", " ", "Enter"].includes(e.key)) return;
+      if (e.type === "wheel" && e.deltaY <= 0) return;
+      ["wheel", "touchmove", "keydown"].forEach((ev) => window.removeEventListener(ev, go));
+      resolve();
+    };
+    ["wheel", "touchmove", "keydown"].forEach((ev) => window.addEventListener(ev, go, { passive: true }));
+  });
+}
+
+async function playTitle() {
+  intro.classList.add("playing");             // song buttons fade; the world stays dark and blurred
+  const titleFx = createIntro();
+  await titleFx.assemble();
+  introWaiting = true;
+  await firstScroll();
+  introWaiting = false;
+  const passed = titleFx.passThrough();        // the words zoom up and rush past the screen...
+  await wait(INTRO_REVEAL_AFTER * 1000);
+  intro.classList.add("hide");                 // ...the world clears...
+  await wait(500);
+  holograms.start(clock.elapsedTime + 0.2);    // ...and the man and cars rise out of the floor
+  await passed;
+  await wait(400);                             // let that scroll gesture finish before orbiting
+}
+
+let titleRunning = false;
+songBtns.forEach((btn) =>
+  btn.addEventListener("click", () => {
+    if (started || titleRunning || !holograms || !songUrls[btn.dataset.src]) return;
+    titleRunning = true;
+    music = new Audio(songUrls[btn.dataset.src]);
+    music.loop = true;
+    music.volume = 0;
+    music.addEventListener("play", () => soundBtn.classList.remove("paused"));
+    music.addEventListener("pause", () => soundBtn.classList.add("paused"));
+    music.play().then(() => fadeIn(music)).catch((err) => console.warn("Music could not play:", err));
+    soundBtn.classList.add("show");
+    playTitle().then(() => {
+      startTime = clock.elapsedTime;
+      started = true;
+    });
+  })
+);
 
 /* ---------- The dream: Manhattan rises, then a scroll-driven tour ---------- */
 // Same projection as the data preprocessing: meters around Times Square, avenues along -z
@@ -432,18 +550,36 @@ function geo([lat, lon], east = 0, north = 0, height = 0) {
 
 const PLACES = {
   timesSquare: [40.757982, -73.985539],
+  oneTimesSquare: [40.75642, -73.986236],
+  rockefeller: [40.75874, -73.978674],
+  centralParkTower: [40.76634, -73.98098],
+  parkSouth: [40.766, -73.976],
+  centralPark: [40.7745, -73.9665],
+  bethesda: [40.774, -73.9708],
+  reservoir: [40.7859, -73.9625],
+  harlemMeer: [40.7975, -73.9555],
+  gwBridge: [40.8533, -73.9527],
+  hudsonRiver86: [40.787, -73.993],
+  hudsonYards: [40.7538, -74.0012],
+  westSide22: [40.7455, -74.0105],
+  highLineSouth: [40.7398, -74.008],
   empireState: [40.74844, -73.985664],
   flatiron: [40.741061, -73.989699],
+  washingtonSquare: [40.7312, -73.9971],
   oneWTC: [40.712742, -74.013382],
+  memorial: [40.7115, -74.0134],
   harbor: [40.6985, -74.0215],
   liberty: [40.689247, -74.044502],
   battery: [40.6995, -74.004],
   brooklynBridge: [40.706086, -73.996864],
   eastRiver: [40.7489, -73.9625],
   chrysler: [40.751652, -73.975311],
-  parkSouth: [40.761, -73.965],
-  centralPark: [40.7812, -73.9665],
 };
+
+// Offsets in the street grid: across the avenues, along them (+ = downtown), height (m)
+function grid(place, across, along, height) {
+  return geo(place, 0, 0, height).add(new THREE.Vector3(across * UNITS_PER_METER, 0, along * UNITS_PER_METER));
+}
 
 // Final wide shot, framed for the screen shape (narrow screens turn toward the moon and pull back)
 const AERIAL = {
@@ -464,32 +600,84 @@ function aerialPose() {
   return [pos, AERIAL.target.clone()];
 }
 
-// Each stop: [camera position, point the camera looks at]. Heights in meters stay above
-// the towers and only drop low over open water (harbor, East River).
-let tourPos = null, tourLook = null;
+// Each stop: camera position, point it looks at, and an optional caption. Heights (m) stay
+// above the towers and only drop low over open water or wide open squares.
+let tourPos = null, tourLook = null, tourCaptions = [];
 function buildTour() {
   const P = PLACES;
-  const start = [camera.position.clone(), new THREE.Vector3(CENTER.x, 2.6, CENTER.z)];
+  const C = (title, line) => ({ title, line });
   const stops = [
-    start,
-    [geo(P.timesSquare, 0, -30, 70), geo(P.timesSquare, 0, 0, 0)],                 // lift off above the man
-    [geo(P.timesSquare, 0, 60, 290), geo(P.empireState, 0, 0, 300)],               // look down to the Empire State
-    [geo(P.empireState, -380, 260, 360), geo(P.empireState, 0, 0, 350)],
-    [geo(P.empireState, 330, 120, 410), geo(P.empireState, 0, 0, 370)],            // around the mast
+    [camera.position.clone(), new THREE.Vector3(CENTER.x, 2.6, CENTER.z)],
+    [grid(P.timesSquare, 0, -120, 22), geo(P.oneTimesSquare, 0, 0, 60),
+      C("Times Square", "Broadway meets 7th Avenue — the crossroads of the world")],
+    [grid(P.timesSquare, 0, 60, 35), grid(P.timesSquare, 0, -260, 40),
+      C("Times Square", "Lit day and night by giant LED screens")],
+    [grid(P.timesSquare, 0, 0, 300), geo(P.rockefeller, 0, 0, 200)],
+    [geo(P.rockefeller, 250, -250, 330), geo(P.rockefeller, 0, 0, 220),
+      C("Rockefeller Center", "30 Rock and the Top of the Rock observation deck")],
+    [geo(P.centralParkTower, 350, -450, 520), geo(P.centralParkTower, 0, 0, 400),
+      C("Billionaires' Row", "The world's slenderest supertall towers line 57th Street")],
+    [geo(P.parkSouth, 0, 0, 380), geo(P.bethesda, 0, 0, 0),
+      C("Central Park", "843 acres of green in the middle of Manhattan")],
+    [geo(P.centralPark, 0, 0, 260), geo(P.reservoir, 0, 0, 0),
+      C("Central Park", "The Reservoir, with the Met Museum on its eastern edge")],
+    [geo(P.harlemMeer, 0, 0, 320), geo(P.gwBridge, 0, 0, 60),
+      C("Harlem", "Uptown, with the George Washington Bridge in the distance")],
+    [geo(P.hudsonRiver86, 0, 0, 300), geo(P.hudsonYards, 0, 0, 300)],
+    [geo(P.hudsonYards, -500, 200, 360), geo(P.hudsonYards, 0, 0, 320),
+      C("Hudson Yards", "The city's newest neighborhood, home of the Edge sky deck")],
+    [geo(P.westSide22, 0, 0, 110), geo(P.highLineSouth, 0, 0, 10),
+      C("The High Line", "An old elevated freight railway turned into a park")],
+    [geo(P.empireState, -380, 260, 380), geo(P.empireState, 0, 0, 350),
+      C("Empire State Building", "1931 · 443 m to the tip of its mast")],
+    [geo(P.empireState, 330, 120, 410), geo(P.empireState, 0, 0, 370),
+      C("Empire State Building", "For nearly 40 years, the tallest building in the world")],
     [geo(P.empireState, 220, -330, 360), geo(P.flatiron, 0, 0, 60)],
-    [geo(P.flatiron, 250, -150, 270), geo(P.oneWTC, 0, 0, 380)],                    // on toward downtown
-    [geo(P.oneWTC, 650, 700, 520), geo(P.oneWTC, 0, 0, 450)],
-    [geo(P.oneWTC, 380, -300, 610), geo(P.oneWTC, 0, 0, 480)],                     // around the spire
-    [geo(P.harbor, 0, 0, 220), geo(P.liberty, 0, 0, 60)],                           // out over the harbor
-    [geo(P.liberty, -180, -260, 75), geo(P.oneWTC, 0, 0, 250)],                     // Liberty with the skyline behind
+    [geo(P.flatiron, 0, 260, 170), geo(P.flatiron, 0, 0, 40),
+      C("Flatiron Building", "1902 · The triangular icon on Madison Square")],
+    [geo(P.washingtonSquare, 0, 450, 200), geo(P.washingtonSquare, 0, 0, 0),
+      C("Washington Square Park", "The heart of Greenwich Village")],
+    [geo(P.oneWTC, 650, 700, 520), geo(P.oneWTC, 0, 0, 450),
+      C("One World Trade Center", "541 m · The tallest building in the Western Hemisphere")],
+    [geo(P.oneWTC, 380, -300, 610), geo(P.oneWTC, 0, 0, 480),
+      C("One World Trade Center", "Its spire reaches a symbolic 1,776 feet")],
+    [geo(P.memorial, -250, -250, 380), geo(P.memorial, 0, 0, 0),
+      C("9/11 Memorial", "Two reflecting pools where the Twin Towers stood")],
+    [geo(P.harbor, 0, 0, 220), geo(P.liberty, 0, 0, 60),
+      C("New York Harbor", "Where ships once brought millions of immigrants")],
+    [geo(P.liberty, 150, -120, 70), geo(P.liberty, 0, 0, 72),
+      C("Statue of Liberty", "A gift from France, 1886 · 93 m from ground to torch")],
+    [geo(P.liberty, -180, -260, 75), geo(P.oneWTC, 0, 0, 250),
+      C("Statue of Liberty", "Lifting her torch toward Lower Manhattan")],
     [geo(P.battery, 0, 0, 150), geo(P.brooklynBridge, 0, 0, 40)],
-    [geo(P.brooklynBridge, 500, 150, 150), geo(P.brooklynBridge, 0, 0, 50)],        // Brooklyn Bridge
-    [geo(P.eastRiver, 0, 0, 330), geo(P.chrysler, 0, 0, 280)],                      // up the East River to the Chrysler
-    [geo(P.parkSouth, 0, 0, 540), geo(P.centralPark, 0, 0, 0)],                     // over to Central Park
-    aerialPose(),                                                                    // the whole island and the moon
+    [geo(P.brooklynBridge, 500, 150, 150), geo(P.brooklynBridge, 0, 0, 50),
+      C("Brooklyn Bridge", "1883 · The first steel-wire suspension bridge")],
+    [geo(P.eastRiver, 0, 0, 330), geo(P.chrysler, 0, 0, 280),
+      C("Chrysler Building", "Art Deco crown of Midtown, beside the United Nations")],
+    [...aerialPose(), C("Manhattan", "21.6 km long, 3.7 km at its widest, home to 1.6 million people")],
   ];
   tourPos = new THREE.CatmullRomCurve3(stops.map((s) => s[0]), false, "centripetal");
   tourLook = new THREE.CatmullRomCurve3(stops.map((s) => s[1]), false, "centripetal");
+  tourCaptions = stops.map((s) => s[2] || null);
+}
+
+const captionEl = document.getElementById("caption");
+const captionTitle = captionEl.querySelector(".cap-title");
+const captionLine = captionEl.querySelector(".cap-line");
+let captionShown = null;
+function updateCaption() {
+  const f = tour * (tourCaptions.length - 1);
+  const i = Math.round(f);
+  const cap = Math.abs(f - i) < 0.42 ? tourCaptions[i] : null;
+  if (cap !== captionShown) {
+    captionShown = cap;
+    captionEl.classList.remove("show");
+    if (cap) {
+      captionTitle.textContent = cap.title;
+      captionLine.textContent = cap.line;
+      requestAnimationFrame(() => captionEl.classList.add("show"));
+    }
+  }
 }
 
 const scrollHint = document.getElementById("scrollHint");
@@ -506,22 +694,29 @@ dreamBtn.addEventListener("click", () => {
 });
 
 const lookAt = new THREE.Vector3();
+const lookSmooth = new THREE.Vector3();
+let lookReady = false;
 function updateCameraMode(t, dt) {
   if (mode === "orbit") {
-    scroll += (scrollTarget - scroll) * (1 - Math.exp(-dt * 3));
+    scroll = smoothDamp(scroll, scrollTarget, orbitSpring, 0.7, dt);
     placeCamera(scroll * Math.PI * 2);
+    scrollHint.classList.toggle("show", introWaiting || (started && t - startTime > 3.5 && scrollTarget < 0.02));
     return;
   }
   // Tour: the scroll position moves the camera along the path (smoothed so it glides)
-  tour += (tourTarget - tour) * (1 - Math.exp(-dt * 2));
+  tour = THREE.MathUtils.clamp(smoothDamp(tour, tourTarget, tourSpring, 1.1, dt), 0, 1);
   tourPos.getPoint(tour, camera.position);
   tourLook.getPoint(tour, lookAt);
-  camera.lookAt(lookAt);
+  // the aim follows a touch behind the position, which softens every turn
+  if (!lookReady) { lookSmooth.copy(lookAt); lookReady = true; }
+  lookSmooth.lerp(lookAt, 1 - Math.exp(-dt * 3.5));
+  camera.lookAt(lookSmooth);
   // keep depth precision good at every height
   const near = THREE.MathUtils.clamp(camera.position.y * 0.02, 0.5, 300);
   if (Math.abs(near - camera.near) > 0.01) { camera.near = near; camera.updateProjectionMatrix(); }
   // invite scrolling once the city has risen around the man; hide it once they do
   scrollHint.classList.toggle("show", t - dreamStart > 3 && tourTarget < 0.01);
+  updateCaption();
 }
 
 /* ---------- Loop ---------- */
@@ -564,7 +759,7 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
   fitCamera();
-  if (mode === "tour") {   // re-frame the final shot for the new screen shape
+  if (mode === "tour" && tourPos) {   // re-frame the final shot for the new screen shape
     const pts = tourPos.points, looks = tourLook.points;
     const [p, l] = aerialPose();
     pts[pts.length - 1].copy(p);
